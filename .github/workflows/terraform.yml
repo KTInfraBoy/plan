@@ -37,38 +37,7 @@ jobs:
           format: table
 
   # ════════════════════════════════════════════════════════════
-  # JOB 2. Infracost — 비용 예측 (API 키 있을 때만)
-  # ════════════════════════════════════════════════════════════
-  cost:
-    name: Infracost 비용 예측
-    runs-on: ubuntu-latest
-    if: ${{ secrets.INFRACOST_API_KEY != '' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Infracost 설치
-        uses: infracost/actions/setup@v3
-        with:
-          api-key: ${{ secrets.INFRACOST_API_KEY }}
-
-      - name: 비용 계산
-        run: |
-          infracost breakdown \
-            --path=./terraform \
-            --terraform-var="my_ip=${{ secrets.MY_IP }}" \
-            --format=table
-
-      - name: PR에 비용 코멘트
-        if: github.event_name == 'pull_request'
-        run: |
-          infracost comment github \
-            --path=/tmp/infracost.json \
-            --repo=${{ github.repository }} \
-            --pull-request=${{ github.event.pull_request.number }} \
-            --github-token=${{ secrets.GITHUB_TOKEN }}
-
-  # ════════════════════════════════════════════════════════════
-  # JOB 3. Terraform
+  # JOB 2. Terraform
   # ════════════════════════════════════════════════════════════
   terraform:
     name: Terraform ${{ github.event.inputs.action || 'plan/apply' }}
@@ -96,7 +65,7 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      # ── PR: Plan 결과를 코멘트로 ────────────────────────────
+      # ── PR: Plan ────────────────────────────────────────────
       - name: Terraform Plan
         id: plan
         if: github.event_name == 'pull_request' || github.event.inputs.action == 'plan'
@@ -126,21 +95,12 @@ jobs:
         if: github.event.inputs.action == 'destroy'
         run: terraform destroy -auto-approve -var="my_ip=${{ secrets.MY_IP }}"
 
-      # ── Discord 알림 (Webhook 있을 때만) ─────────────────────
-      - name: Discord 성공 알림
-        if: success() && secrets.DISCORD_WEBHOOK_URL != ''
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          title: "✅ Terraform 완료"
-          description: "작업: ${{ github.event.inputs.action || 'apply' }} | 실행자: ${{ github.actor }}"
-          color: 0x27ae60
-
-      - name: Discord 실패 알림
-        if: failure() && secrets.DISCORD_WEBHOOK_URL != ''
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          title: "❌ Terraform 실패"
-          description: "작업: ${{ github.event.inputs.action || 'apply' }} | 실행자: ${{ github.actor }}"
-          color: 0xe74c3c
+      # ── Discord 알림 (Webhook 등록 후 활성화) ────────────────
+      # - name: Discord 성공 알림
+      #   if: success()
+      #   uses: sarisia/actions-status-discord@v1
+      #   with:
+      #     webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      #     title: "✅ Terraform 완료"
+      #     description: "작업: ${{ github.event.inputs.action || 'apply' }} | 실행자: ${{ github.actor }}"
+      #     color: 0x27ae60
