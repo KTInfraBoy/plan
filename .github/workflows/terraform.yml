@@ -28,13 +28,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Trivy 설치
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
       - name: Trivy Terraform 코드 스캔
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: config
-          scan-ref: ./terraform
-          exit-code: 0
-          format: table
+        run: trivy config ./terraform --exit-code 0 --format table
 
   # ════════════════════════════════════════════════════════════
   # JOB 2. Terraform
