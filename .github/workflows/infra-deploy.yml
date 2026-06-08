@@ -1,0 +1,191 @@
+name: "infra"
+
+on:
+  pull_request:
+    branches: ["master"]
+    paths: ["terraform/**"]
+  push:
+    branches: ["master"]
+    paths: ["terraform/**"]
+  workflow_dispatch:
+    inputs:
+      execute_apply:
+        description: '승인: 보안 및 비용 리포트를 검토 완료하였으며, 실제 인프라 배포를 진행합니다.'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: terraform-state
+  cancel-in-progress: false
+
+jobs:
+  plan_and_scan:
+    runs-on: ubuntu-latest
+    env:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: AWS 자격증명 설정
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: DynamoDB 락 해제
+        run: |
+          aws dynamodb delete-item \
+            --table-name infraboy-tfstate-lock \
+            --key '{"LockID": {"S": "infraboy-tfstate/terraform/infraboy.tfstate"}}' \
+            --region ap-northeast-2 || true
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: 'terraform'
+          format: 'table'
+          output: 'trivy-report.txt'
+          hide-progress: false
+
+      - name: Show Trivy Output
+        run: cat trivy-report.txt
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -var="my_ip=${{ secrets.MY_IP }}" -no-color -out=tfplan 2>&1 | tee plan-output.txt
+
+      - name: Terraform Show JSON
+        working-directory: terraform
+        run: terraform show -json tfplan > plan.json
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Run Infracost
+        working-directory: terraform
+        run: |
+          infracost breakdown --path plan.json --format table --out-file infracost-report.txt
+          cat infracost-report.txt
+
+      - name: Generate Telegram Message
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        run: |
+          cat > telegram-message.md <<EOF
+          🏗️ [인프라 사전 검증 리포트]
+
+          💰 [예상 월 비용]
+          EOF
+
+          grep -E "OVERALL TOTAL|Total Monthly" terraform/infracost-report.txt | head -3 >> telegram-message.md || echo "(비용 정보 없음)" >> telegram-message.md
+
+          cat >> telegram-message.md <<EOF
+
+          🔒 [보안 스캔 결과]
+          EOF
+
+          CRITICAL=$(grep -c "CRITICAL:" trivy-report.txt 2>/dev/null || echo 0)
+          HIGH=$(grep -c "HIGH:" trivy-report.txt 2>/dev/null || echo 0)
+          MEDIUM=$(grep -c "MEDIUM:" trivy-report.txt 2>/dev/null || echo 0)
+
+          echo "- 🔴 CRITICAL: $CRITICAL" >> telegram-message.md
+          echo "- 🟠 HIGH: $HIGH" >> telegram-message.md
+          echo "- 🟡 MEDIUM: $MEDIUM" >> telegram-message.md
+
+          echo "" >> telegram-message.md
+          echo "📋 상세: GitHub Actions 로그 참조" >> telegram-message.md
+          echo "🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> telegram-message.md
+
+          echo "=== 생성된 메시지 ==="
+          cat telegram-message.md
+
+      - name: Send Telegram Notification
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message_file: telegram-message.md
+
+      - name: Post Plan & Cost to PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/plan-output.txt', 'utf8');
+            const cost = fs.readFileSync('terraform/infracost-report.txt', 'utf8');
+
+            const output = `## 인프라 변경 사전 검증 리포트\n### Infracost 예상 비용\n\`\`\`text\n${cost}\n\`\`\`\n### Terraform Plan 상세 내역\n<details><summary>Plan 결과 전개</summary>\n\n\`\`\`text\n${plan}\n\`\`\`\n\n</details>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+  apply:
+    needs: plan_and_scan
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.execute_apply == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: AWS 자격증명 설정
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve -var="my_ip=${{ secrets.MY_IP }}"
+
+      - name: Send Apply Success Notification
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ✅ 수동 인프라 배포(Terraform Apply) 작업이 정상적으로 완료되었습니다.
+            실행자: ${{ github.actor }}
+
+      - name: Send Apply Failure Notification
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ❌ 수동 인프라 배포(Terraform Apply) 실패
+            실행자: ${{ github.actor }}
+            GitHub Actions 로그를 확인하십시오.
