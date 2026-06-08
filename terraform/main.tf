@@ -255,11 +255,12 @@ resource "aws_lb_listener" "http" {
 
 # ── EC2 테스트 인스턴스 (Private Subnet) ─────────────────────
 resource "aws_instance" "app" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = "t3.micro"
-  subnet_id              = aws_subnet.private_a.id
-  vpc_security_group_ids = [aws_security_group.ec2.id]
-  key_name               = aws_key_pair.infraboy.key_name
+  ami                       = data.aws_ami.al2023.id
+  instance_type             = "t3.micro"
+  subnet_id                 = aws_subnet.private_a.id
+  vpc_security_group_ids    = [aws_security_group.ec2.id]
+  key_name                  = aws_key_pair.infraboy.key_name
+  user_data_replace_on_change = true
 
   user_data = <<-EOF
     #!/bin/bash
