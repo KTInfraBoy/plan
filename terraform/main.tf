@@ -274,8 +274,25 @@ resource "aws_instance" "app" {
       -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
 
-    # 앱 실행 (로컬 DB 포함 개발용 compose 사용)
+    # nginx 설정 파일 생성
     mkdir -p /home/ec2-user/app
+    cat > /home/ec2-user/app/nginx.conf << 'NGINX'
+server {
+    listen 80;
+    location / {
+        proxy_pass         http://app:8000;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_read_timeout 10s;
+    }
+    location /health {
+        proxy_pass http://app:8000/health;
+        access_log off;
+    }
+}
+NGINX
+
+    # 앱 실행 (로컬 DB 포함 개발용 compose 사용)
     cat > /home/ec2-user/app/docker-compose.yml << 'COMPOSE'
     services:
       app:
@@ -292,6 +309,8 @@ resource "aws_instance" "app" {
         image: nginx:alpine
         ports:
           - "80:80"
+        volumes:
+          - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
         depends_on:
           - app
         restart: always
