@@ -1,0 +1,146 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches: [master]
+    paths: ['terraform/**']
+
+  pull_request:
+    branches: [master]
+    paths: ['terraform/**']
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '실행할 작업'
+        required: true
+        default: 'plan'
+        type: choice
+        options: [plan, apply, destroy]
+
+jobs:
+  # ════════════════════════════════════════════════════════════
+  # JOB 1. Trivy — 보안 취약점 스캔
+  # ════════════════════════════════════════════════════════════
+  security:
+    name: Trivy 보안 스캔
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy Terraform 코드 스캔
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: ./terraform
+          exit-code: 0
+          format: table
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 2. Infracost — 비용 예측 (API 키 있을 때만)
+  # ════════════════════════════════════════════════════════════
+  cost:
+    name: Infracost 비용 예측
+    runs-on: ubuntu-latest
+    if: ${{ secrets.INFRACOST_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Infracost 설치
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: 비용 계산
+        run: |
+          infracost breakdown \
+            --path=./terraform \
+            --terraform-var="my_ip=${{ secrets.MY_IP }}" \
+            --format=table
+
+      - name: PR에 비용 코멘트
+        if: github.event_name == 'pull_request'
+        run: |
+          infracost comment github \
+            --path=/tmp/infracost.json \
+            --repo=${{ github.repository }} \
+            --pull-request=${{ github.event.pull_request.number }} \
+            --github-token=${{ secrets.GITHUB_TOKEN }}
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 3. Terraform
+  # ════════════════════════════════════════════════════════════
+  terraform:
+    name: Terraform ${{ github.event.inputs.action || 'plan/apply' }}
+    runs-on: ubuntu-latest
+    needs: [security]
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+
+      - name: AWS 자격증명 설정
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ap-northeast-2
+
+      - name: Terraform Init
+        run: terraform init
+
+      # ── PR: Plan 결과를 코멘트로 ────────────────────────────
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'pull_request' || github.event.inputs.action == 'plan'
+        run: terraform plan -var="my_ip=${{ secrets.MY_IP }}" -no-color
+        continue-on-error: true
+
+      - name: PR에 Plan 결과 코멘트
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const plan = `${{ steps.plan.outputs.stdout }}`.substring(0, 3000);
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `#### 📋 Terraform Plan\n\`\`\`\n${plan}\n\`\`\``
+            });
+
+      # ── master push 또는 수동 apply ─────────────────────────
+      - name: Terraform Apply
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.action == 'apply'
+        run: terraform apply -auto-approve -var="my_ip=${{ secrets.MY_IP }}"
+
+      # ── 수동 destroy ─────────────────────────────────────────
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        run: terraform destroy -auto-approve -var="my_ip=${{ secrets.MY_IP }}"
+
+      # ── Discord 알림 (Webhook 있을 때만) ─────────────────────
+      - name: Discord 성공 알림
+        if: success() && secrets.DISCORD_WEBHOOK_URL != ''
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "✅ Terraform 완료"
+          description: "작업: ${{ github.event.inputs.action || 'apply' }} | 실행자: ${{ github.actor }}"
+          color: 0x27ae60
+
+      - name: Discord 실패 알림
+        if: failure() && secrets.DISCORD_WEBHOOK_URL != ''
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "❌ Terraform 실패"
+          description: "작업: ${{ github.event.inputs.action || 'apply' }} | 실행자: ${{ github.actor }}"
+          color: 0xe74c3c

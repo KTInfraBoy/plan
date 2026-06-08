@@ -1,0 +1,47 @@
+# 프로덕션용 (cloudflared 역터널링 버전)
+# Cloudflare Tunnel을 통해 MGMT Prometheus가 node_exporter 메트릭 수집
+# 실행: UserData에서 docker compose -f docker-compose.prod.cloudflared.yml up -d
+
+services:
+
+  app:
+    image: jj3061/fastapi-app:latest
+    environment:
+      - DB_URL=${DB_URL}
+    ports:
+      - "8000:8000"
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.8"
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - /home/ec2-user/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    restart: always
+
+  node_exporter:
+    image: prom/node-exporter
+    network_mode: host
+    pid: host
+    volumes:
+      - /:/host:ro
+    command: --path.rootfs=/host
+    restart: always
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    network_mode: host                        # node_exporter :9100 접근을 위해 호스트 네트워크
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}  # UserData에서 주입
+    restart: always
+    depends_on:
+      - node_exporter

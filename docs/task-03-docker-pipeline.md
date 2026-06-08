@@ -7,12 +7,12 @@
 ```
 소스코드 작성
     → Dockerfile 작성
-    → docker build -t yourteam/fastapi-app:latest .
-    → docker push yourteam/fastapi-app:latest       ← CI/CD 자동화
+    → docker build -t jj3061/fastapi-app:latest .
+    → docker push jj3061/fastapi-app:latest       ← CI/CD 자동화
     
 각 노드에서:
-    → docker pull yourteam/fastapi-app:latest
-    → docker run -d -p 8000:8000 yourteam/fastapi-app:latest
+    → docker pull jj3061/fastapi-app:latest
+    → docker run -d -p 8000:8000 jj3061/fastapi-app:latest
 ```
 
 ## 체크리스트

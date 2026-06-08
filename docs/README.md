@@ -41,6 +41,19 @@ PHASE 3: Privacy DevSecOps / AI 로그 분석
 
 ---
 
+## 추가 문서
+
+| 문서 | 파일 | 내용 |
+|------|------|------|
+| 전체 프로젝트 흐름 | [project-flow.md](./project-flow.md) | Phase 0~6 타임라인, 팀원별 핸드오프 |
+| 각 기술 동작 원리 | [how-each-works.md](./how-each-works.md) | Terraform, Docker, Ansible, Prometheus 등 상세 설명 |
+| 최진제 개발 계획 | [plan-최진제.md](./plan-최진제.md) | Docker/Ansible/Packer 개발 순서 |
+| 멘토링 준비 가이드 | [mentoring-prep.md](./mentoring-prep.md) | 현직자 멘토링 질문 목록 및 준비 자료 |
+| 장애 대응 가이드 | [incident-response.md](./incident-response.md) | 장애 유형별 증상, 원인, 대응 명령어 |
+| AIOps 자동 장애 대응 | [aiops-incident-automation.md](./aiops-incident-automation.md) | Gemini 분류 → 자동 스크립트 실행 시스템 |
+
+---
+
 ## 핵심 KPI
 
 | 지표 | 목표 |

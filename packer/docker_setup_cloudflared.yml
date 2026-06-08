@@ -1,0 +1,74 @@
+# ============================================================
+# Packer가 실행하는 Ansible playbook — cloudflared 버전
+# Tailscale 없음, cloudflared 역터널링으로 메트릭 수집
+# ============================================================
+---
+- name: infraboy AMI 기본 환경 구성 (cloudflared 버전)
+  hosts: all
+  become: true
+
+  tasks:
+
+    # ──────────────────────────────────────────────────────
+    # STEP 1. Docker 설치
+    # ──────────────────────────────────────────────────────
+    - name: Docker 설치 스크립트 실행
+      shell: curl -fsSL https://get.docker.com | sh
+      args:
+        creates: /usr/bin/docker
+
+    - name: Docker 서비스 부팅 시 자동 시작 등록
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: ec2-user를 docker 그룹에 추가
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
+
+    # ──────────────────────────────────────────────────────
+    # STEP 2. docker-compose 설치
+    # ──────────────────────────────────────────────────────
+    - name: docker-compose 설치
+      shell: |
+        curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+          -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+      args:
+        creates: /usr/local/bin/docker-compose
+
+    # ──────────────────────────────────────────────────────
+    # STEP 3. 프로덕션 compose 파일 배포
+    # ──────────────────────────────────────────────────────
+    - name: 프로덕션 compose 파일 복사 (cloudflared 버전)
+      copy:
+        src: ../app/docker-compose.prod.cloudflared.yml
+        dest: /home/ec2-user/docker-compose.prod.cloudflared.yml
+        owner: ec2-user
+        mode: '0644'
+
+    - name: nginx.conf 복사
+      copy:
+        src: ../app/nginx/nginx.conf
+        dest: /home/ec2-user/nginx.conf
+        owner: ec2-user
+        mode: '0644'
+
+    # ──────────────────────────────────────────────────────
+    # STEP 4. 이미지 미리 pull (스케일아웃 속도 단축)
+    # ──────────────────────────────────────────────────────
+    - name: FastAPI 앱 이미지 미리 pull
+      shell: docker pull jj3061/fastapi-app:latest
+      ignore_errors: yes
+
+    - name: Nginx 이미지 미리 pull
+      shell: docker pull nginx:alpine
+
+    - name: node_exporter 이미지 미리 pull
+      shell: docker pull prom/node-exporter
+
+    - name: cloudflared 이미지 미리 pull
+      shell: docker pull cloudflare/cloudflared:latest
