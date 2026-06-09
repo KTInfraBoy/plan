@@ -43,6 +43,30 @@ data "aws_ami" "al2023" {
   }
 }
 
+# ── IAM Role (SSM 접속용) ────────────────────────────────────
+resource "aws_iam_role" "ec2_ssm" {
+  name = "${var.project}-ec2-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.ec2_ssm.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ec2_ssm" {
+  name = "${var.project}-ec2-ssm-profile"
+  role = aws_iam_role.ec2_ssm.name
+}
+
 # ── SSH 키 생성 ───────────────────────────────────────────────
 resource "tls_private_key" "infraboy" {
   algorithm = "RSA"
@@ -318,6 +342,10 @@ resource "aws_launch_template" "app" {
   key_name      = aws_key_pair.infraboy.key_name
 
   vpc_security_group_ids = [aws_security_group.ec2.id]
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ec2_ssm.name
+  }
 
   user_data = base64encode(<<-EOF
     #!/bin/bash
