@@ -317,9 +317,10 @@ resource "aws_instance" "db" {
 
   user_data = <<-EOF
     #!/bin/bash
-    curl -fsSL https://get.docker.com | sh
+    dnf install -y docker
     systemctl enable docker
     systemctl start docker
+    usermod -aG docker ec2-user
 
     docker run -d \
       --name postgres \
@@ -353,7 +354,7 @@ resource "aws_launch_template" "app" {
 
     # Docker 설치 (packer AMI에는 이미 있으므로 없을 때만 설치)
     if ! command -v docker &>/dev/null; then
-      curl -fsSL https://get.docker.com | sh
+      dnf install -y docker
       usermod -aG docker ec2-user
       systemctl enable docker
     fi
