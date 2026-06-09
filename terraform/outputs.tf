@@ -3,11 +3,6 @@ output "alb_dns" {
   value       = "http://${aws_lb.main.dns_name}"
 }
 
-output "ec2_private_ip" {
-  description = "EC2 Private IP — SSH 접속용"
-  value       = aws_instance.app.private_ip
-}
-
 output "vpc_id" {
   value = aws_vpc.main.id
 }
@@ -17,7 +12,12 @@ output "nat_public_ip" {
   value       = aws_eip.nat.public_ip
 }
 
-output "ssh_command" {
-  description = "SSH 접속 명령어 (Bastion 없이는 VPN 필요)"
-  value       = "ssh -i infraboy.pem ec2-user@${aws_instance.app.private_ip}"
+output "db_private_ip" {
+  description = "DB EC2 Private IP"
+  value       = aws_instance.db.private_ip
+}
+
+output "asg_name" {
+  description = "Auto Scaling Group 이름"
+  value       = aws_autoscaling_group.app.name
 }

@@ -253,92 +253,138 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# ── EC2 테스트 인스턴스 (Private Subnet) ─────────────────────
-resource "aws_instance" "app" {
-  ami                       = data.aws_ami.al2023.id
-  instance_type             = "t3.micro"
-  subnet_id                 = aws_subnet.private_a.id
-  vpc_security_group_ids    = [aws_security_group.ec2.id]
-  key_name                  = aws_key_pair.infraboy.key_name
+# ── 보안그룹 — DB ─────────────────────────────────────────────
+resource "aws_security_group" "db" {
+  name   = "${var.project}-sg-db"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ec2.id]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.project}-sg-db" }
+}
+
+# ── DB EC2 (Private Subnet) ───────────────────────────────────
+resource "aws_instance" "db" {
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.private_a.id
+  vpc_security_group_ids = [aws_security_group.db.id]
+  key_name               = aws_key_pair.infraboy.key_name
   user_data_replace_on_change = true
 
   user_data = <<-EOF
     #!/bin/bash
-    # Docker 설치
     curl -fsSL https://get.docker.com | sh
-    usermod -aG docker ec2-user
     systemctl enable docker
     systemctl start docker
 
-    # docker-compose 설치
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
-      -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
-
-    # nginx 설정 파일 생성
-    mkdir -p /home/ec2-user/app
-    cat > /home/ec2-user/app/nginx.conf << 'NGINX'
-server {
-    listen 80;
-    location / {
-        proxy_pass         http://app:8000;
-        proxy_set_header   Host $host;
-        proxy_set_header   X-Real-IP $remote_addr;
-        proxy_read_timeout 10s;
-    }
-    location /health {
-        proxy_pass http://app:8000/health;
-        access_log off;
-    }
-}
-NGINX
-
-    # 앱 실행 (로컬 DB 포함 개발용 compose 사용)
-    cat > /home/ec2-user/app/docker-compose.yml << 'COMPOSE'
-    services:
-      app:
-        image: jj3061/fastapi-app:latest
-        environment:
-          - DB_URL=postgresql://scott:tiger@db:5432/scott_db
-        ports:
-          - "8000:8000"
-        depends_on:
-          db:
-            condition: service_healthy
-        restart: always
-      nginx:
-        image: nginx:alpine
-        ports:
-          - "80:80"
-        volumes:
-          - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-        depends_on:
-          - app
-        restart: always
-      db:
-        image: postgres:16
-        environment:
-          POSTGRES_USER: scott
-          POSTGRES_PASSWORD: tiger
-          POSTGRES_DB: scott_db
-        healthcheck:
-          test: ["CMD-SHELL", "pg_isready -U scott -d scott_db"]
-          interval: 10s
-          timeout: 5s
-          retries: 5
-        restart: always
-    COMPOSE
-
-    cd /home/ec2-user/app
-    docker-compose up -d
+    docker run -d \
+      --name postgres \
+      --restart always \
+      -e POSTGRES_USER=scott \
+      -e POSTGRES_PASSWORD=tiger \
+      -e POSTGRES_DB=scott_db \
+      -p 5432:5432 \
+      postgres:16
   EOF
 
-  tags = { Name = "${var.project}-app-test" }
+  tags = { Name = "${var.project}-db" }
 }
 
-# ── ALB Target Group에 EC2 등록 ───────────────────────────────
-resource "aws_lb_target_group_attachment" "app" {
-  target_group_arn = aws_lb_target_group.app.arn
-  target_id        = aws_instance.app.id
-  port             = 80
+# ── Launch Template (App ASG용) ───────────────────────────────
+resource "aws_launch_template" "app" {
+  name_prefix   = "${var.project}-lt-"
+  image_id      = var.ami_id != "" ? var.ami_id : data.aws_ami.al2023.id
+  instance_type = "t3.micro"
+  key_name      = aws_key_pair.infraboy.key_name
+
+  vpc_security_group_ids = [aws_security_group.ec2.id]
+
+  user_data = base64encode(<<-EOF
+    #!/bin/bash
+    systemctl start docker
+
+    echo "DB_URL=postgresql://scott:tiger@${aws_instance.db.private_ip}:5432/scott_db" \
+      > /home/ec2-user/.env
+
+    cd /home/ec2-user
+    docker compose --env-file .env -f docker-compose.prod.yml up -d
+  EOF
+  )
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = { Name = "${var.project}-asg" }
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# ── Auto Scaling Group ────────────────────────────────────────
+resource "aws_autoscaling_group" "app" {
+  name                      = "${var.project}-asg"
+  desired_capacity          = var.desired_capacity
+  min_size                  = var.min_size
+  max_size                  = var.max_size
+  vpc_zone_identifier       = [aws_subnet.private_a.id, aws_subnet.private_c.id]
+  target_group_arns         = [aws_lb_target_group.app.arn]
+  health_check_type         = "ELB"
+  health_check_grace_period = 180
+
+  launch_template {
+    id      = aws_launch_template.app.id
+    version = "$Latest"
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "${var.project}-asg"
+    propagate_at_launch = true
+  }
+}
+
+# ── 예약 스케일링 ─────────────────────────────────────────────
+resource "aws_autoscaling_schedule" "scale_up" {
+  count = var.scale_up_cron != "" ? 1 : 0
+
+  scheduled_action_name  = "scheduled-scale-up"
+  autoscaling_group_name = aws_autoscaling_group.app.name
+  desired_capacity       = var.scale_up_capacity
+  min_size               = var.min_size
+  max_size               = var.max_size
+  recurrence             = var.scale_up_cron
+  time_zone              = "Asia/Seoul"
+}
+
+resource "aws_autoscaling_schedule" "scale_down" {
+  count = var.scale_down_cron != "" ? 1 : 0
+
+  scheduled_action_name  = "scheduled-scale-down"
+  autoscaling_group_name = aws_autoscaling_group.app.name
+  desired_capacity       = var.scale_down_capacity
+  min_size               = var.min_size
+  max_size               = var.max_size
+  recurrence             = var.scale_down_cron
+  time_zone              = "Asia/Seoul"
 }
