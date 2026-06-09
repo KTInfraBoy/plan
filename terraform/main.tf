@@ -321,13 +321,77 @@ resource "aws_launch_template" "app" {
 
   user_data = base64encode(<<-EOF
     #!/bin/bash
+    set -e
+
+    # Docker 설치 (packer AMI에는 이미 있으므로 없을 때만 설치)
+    if ! command -v docker &>/dev/null; then
+      curl -fsSL https://get.docker.com | sh
+      usermod -aG docker ec2-user
+      systemctl enable docker
+    fi
     systemctl start docker
 
+    # docker-compose 설치 (packer AMI에는 이미 있음)
+    if ! command -v docker-compose &>/dev/null; then
+      curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+        -o /usr/local/bin/docker-compose
+      chmod +x /usr/local/bin/docker-compose
+    fi
+
+    # nginx.conf 생성 (packer AMI에는 이미 있음)
+    if [ ! -f /home/ec2-user/nginx.conf ]; then
+      cat > /home/ec2-user/nginx.conf << 'NGINX'
+    server {
+        listen 80;
+        location / {
+            proxy_pass         http://app:8000;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_read_timeout 10s;
+        }
+        location /health {
+            proxy_pass http://app:8000/health;
+            access_log off;
+        }
+    }
+    NGINX
+    fi
+
+    # docker-compose.prod.yml 생성 (packer AMI에는 이미 있음)
+    if [ ! -f /home/ec2-user/docker-compose.prod.yml ]; then
+      cat > /home/ec2-user/docker-compose.prod.yml << 'COMPOSE'
+    services:
+      app:
+        image: jj3061/fastapi-app:latest
+        environment:
+          - DB_URL=$${DB_URL}
+        restart: always
+      nginx:
+        image: nginx:alpine
+        ports:
+          - "80:80"
+        volumes:
+          - /home/ec2-user/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+        depends_on:
+          - app
+        restart: always
+      node_exporter:
+        image: prom/node-exporter
+        network_mode: host
+        pid: host
+        volumes:
+          - /:/host:ro
+        command: --path.rootfs=/host
+        restart: always
+    COMPOSE
+    fi
+
+    # DB URL 설정 및 앱 실행
     echo "DB_URL=postgresql://scott:tiger@${aws_instance.db.private_ip}:5432/scott_db" \
       > /home/ec2-user/.env
 
     cd /home/ec2-user
-    docker compose --env-file .env -f docker-compose.prod.yml up -d
+    docker-compose --env-file .env -f docker-compose.prod.yml up -d
   EOF
   )
 
@@ -350,7 +414,7 @@ resource "aws_autoscaling_group" "app" {
   vpc_zone_identifier       = [aws_subnet.private_a.id, aws_subnet.private_c.id]
   target_group_arns         = [aws_lb_target_group.app.arn]
   health_check_type         = "ELB"
-  health_check_grace_period = 180
+  health_check_grace_period = 300
 
   launch_template {
     id      = aws_launch_template.app.id
