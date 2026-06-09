@@ -320,9 +320,11 @@ resource "aws_instance" "db" {
     volume_type = "gp3"
   }
 
+  iam_instance_profile = aws_iam_instance_profile.ec2_ssm.name
+
   user_data = <<-EOF
     #!/bin/bash
-    # v2 - force replace for 20GB volume
+    # v3 - add SSM profile
     dnf install -y docker
     systemctl enable docker
     systemctl start docker
