@@ -322,6 +322,7 @@ resource "aws_instance" "db" {
 
   user_data = <<-EOF
     #!/bin/bash
+    # v2 - force replace for 20GB volume
     dnf install -y docker
     systemctl enable docker
     systemctl start docker
