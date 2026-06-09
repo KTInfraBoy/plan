@@ -59,12 +59,17 @@ jobs:
         with:
           scan-type: 'config'
           scan-ref: 'terraform'
-          format: 'table'
-          output: 'trivy-report.txt'
+          format: 'json'
+          output: 'trivy-report.json'
           hide-progress: false
 
       - name: Show Trivy Output
-        run: cat trivy-report.txt
+        run: |
+          echo "=== Trivy 보안 스캔 결과 ==="
+          jq -r '.Results[]? | .Misconfigurations[]? |
+            select(.Severity == "CRITICAL" or .Severity == "HIGH" or .Severity == "MEDIUM") |
+            "[\(.Severity)] \(.CauseMetadata.Resource // .ID)\n  ID: \(.ID)\n  \(.Title)\n"' \
+            trivy-report.json || echo "취약점 없음"
 
       - name: Terraform Plan
         working-directory: terraform
@@ -82,36 +87,38 @@ jobs:
       - name: Run Infracost
         working-directory: terraform
         run: |
-          infracost breakdown --path plan.json --format table --out-file infracost-report.txt
-          cat infracost-report.txt
+          infracost breakdown --path plan.json --format json --out-file infracost-report.json
+          echo "=== Infracost 리소스별 비용 ==="
+          infracost output --path infracost-report.json --format table
 
       - name: Generate Telegram Message
         if: always()
         run: |
-          cat > telegram-message.md <<EOF
-          🏗️ [인프라 사전 검증 리포트]
-
-          💰 [예상 월 비용]
-          EOF
-
-          grep -E "OVERALL TOTAL|Total Monthly" terraform/infracost-report.txt | head -3 >> telegram-message.md || echo "(비용 정보 없음)" >> telegram-message.md
-
-          cat >> telegram-message.md <<EOF
-
-          🔒 [보안 스캔 결과]
-          EOF
-
-          CRITICAL=$(grep -c "CRITICAL:" trivy-report.txt 2>/dev/null || echo 0)
-          HIGH=$(grep -c "HIGH:" trivy-report.txt 2>/dev/null || echo 0)
-          MEDIUM=$(grep -c "MEDIUM:" trivy-report.txt 2>/dev/null || echo 0)
-
-          echo "- 🔴 CRITICAL: $CRITICAL" >> telegram-message.md
-          echo "- 🟠 HIGH: $HIGH" >> telegram-message.md
-          echo "- 🟡 MEDIUM: $MEDIUM" >> telegram-message.md
-
-          echo "" >> telegram-message.md
-          echo "📋 상세: GitHub Actions 로그 참조" >> telegram-message.md
-          echo "🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> telegram-message.md
+          {
+            echo "🏗️ [인프라 사전 검증 리포트]"
+            echo "브랜치: ${{ github.ref_name }} | 실행자: ${{ github.actor }}"
+            echo ""
+            echo "💰 [리소스별 예상 월 비용]"
+            jq -r '.projects[].breakdown.resources[] |
+              select(.monthlyCost != null) |
+              "• \(.name): $\(.monthlyCost)/월"' \
+              terraform/infracost-report.json 2>/dev/null || echo "(비용 정보 없음)"
+            TOTAL=$(jq -r '.totalMonthlyCost // "N/A"' terraform/infracost-report.json 2>/dev/null)
+            echo "━━━ TOTAL: \$$TOTAL/월"
+            echo ""
+            echo "🔒 [보안 취약점 상세]"
+            FINDINGS=$(jq -r '.Results[]? | .Misconfigurations[]? |
+              select(.Severity == "CRITICAL" or .Severity == "HIGH" or .Severity == "MEDIUM") |
+              "[\(.Severity)] \(.CauseMetadata.Resource // .ID): \(.Title)"' \
+              trivy-report.json 2>/dev/null)
+            if [ -z "$FINDINGS" ]; then
+              echo "취약점 없음"
+            else
+              echo "$FINDINGS"
+            fi
+            echo ""
+            echo "🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > telegram-message.md
 
           echo "=== 생성된 메시지 ==="
           cat telegram-message.md
@@ -131,7 +138,7 @@ jobs:
           script: |
             const fs = require('fs');
             const plan = fs.readFileSync('terraform/plan-output.txt', 'utf8');
-            const cost = fs.readFileSync('terraform/infracost-report.txt', 'utf8');
+            const cost = require('child_process').execSync('infracost output --path terraform/infracost-report.json --format table').toString();
 
             const output = `## 인프라 변경 사전 검증 리포트\n### Infracost 예상 비용\n\`\`\`text\n${cost}\n\`\`\`\n### Terraform Plan 상세 내역\n<details><summary>Plan 결과 전개</summary>\n\n\`\`\`text\n${plan}\n\`\`\`\n\n</details>`;
 
