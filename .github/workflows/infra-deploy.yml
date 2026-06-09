@@ -86,7 +86,7 @@ jobs:
           cat infracost-report.txt
 
       - name: Generate Telegram Message
-        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        if: always()
         run: |
           cat > telegram-message.md <<EOF
           🏗️ [인프라 사전 검증 리포트]
@@ -117,7 +117,7 @@ jobs:
           cat telegram-message.md
 
       - name: Send Telegram Notification
-        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        if: always()
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
