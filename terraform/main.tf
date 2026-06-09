@@ -315,6 +315,11 @@ resource "aws_instance" "db" {
   key_name               = aws_key_pair.infraboy.key_name
   user_data_replace_on_change = true
 
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+  }
+
   user_data = <<-EOF
     #!/bin/bash
     dnf install -y docker
@@ -346,6 +351,14 @@ resource "aws_launch_template" "app" {
 
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_ssm.name
+  }
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      volume_size = 30
+      volume_type = "gp3"
+    }
   }
 
   user_data = base64encode(<<-EOF
