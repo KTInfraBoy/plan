@@ -1,5 +1,6 @@
 variable "region" {
   default = "ap-northeast-2"
+  description = "AWS 리전"
 }
 
 variable "project" {
