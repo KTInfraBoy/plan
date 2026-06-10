@@ -43,8 +43,6 @@ jobs:
 
       - name: Packer Build
         working-directory: packer
-        env:
-          PKR_VAR_tailscale_authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: packer build . 2>&1 | tee packer-output.log
 
       - name: Debug Packer Output

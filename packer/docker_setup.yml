@@ -1,16 +1,7 @@
-# ============================================================
-# Packer가 실행하는 Ansible playbook
-# 수업 test07_packer/nginx_setup.yml 패턴 확장
-#
-# nginx 설치 → Docker + node_exporter + Tailscale 설치로 변경
-# ============================================================
 ---
 - name: infraboy AMI 기본 환경 구성
   hosts: all
   become: true
-
-  vars:
-    tailscale_authkey: "{{ tailscale_authkey }}"  # packer에서 주입
 
   tasks:
 
@@ -20,7 +11,7 @@
     - name: Docker 설치 스크립트 실행
       shell: curl -fsSL https://get.docker.com | sh
       args:
-        creates: /usr/bin/docker    # 이미 있으면 skip (멱등성)
+        creates: /usr/bin/docker
 
     - name: Docker 서비스 부팅 시 자동 시작 등록
       systemd:
@@ -35,22 +26,7 @@
         append: yes
 
     # ──────────────────────────────────────────────────────
-    # STEP 2. Tailscale 설치만 (연결은 user_data에서)
-    # 각 EC2가 부팅 시 개별 인증해야 하므로 up은 AMI에 굽지 않음
-    # ──────────────────────────────────────────────────────
-    - name: Tailscale 설치
-      shell: curl -fsSL https://tailscale.com/install.sh | sh
-      args:
-        creates: /usr/bin/tailscale
-
-    - name: Tailscale 데몬 부팅 시 자동 시작 등록
-      systemd:
-        name: tailscaled
-        enabled: yes
-        state: started
-
-    # ──────────────────────────────────────────────────────
-    # STEP 3. docker-compose 설치
+    # STEP 2. docker-compose 설치
     # ──────────────────────────────────────────────────────
     - name: docker-compose 설치
       shell: |
@@ -61,8 +37,8 @@
         creates: /usr/local/bin/docker-compose
 
     # ──────────────────────────────────────────────────────
-    # STEP 4. 프로덕션 compose 파일 배포
-    # UserData에서 docker compose up -d 만 실행하면 됨
+    # STEP 3. 설정 파일 배포
+    # user_data에서 docker-compose up -d 만 실행하면 됨
     # ──────────────────────────────────────────────────────
     - name: 프로덕션 compose 파일 복사
       copy:
@@ -77,16 +53,3 @@
         dest: /home/ec2-user/nginx.conf
         owner: ec2-user
         mode: '0644'
-
-    # ──────────────────────────────────────────────────────
-    # STEP 5. 이미지 미리 pull (핵심 — 스케일아웃 속도 단축)
-    # ──────────────────────────────────────────────────────
-    - name: Nginx 이미지 미리 pull
-      shell: docker pull nginx:alpine
-
-    - name: node_exporter 이미지 미리 pull
-      shell: docker pull prom/node-exporter
-
-    - name: FastAPI 앱 이미지 미리 pull
-      shell: docker pull jj3061/fastapi-app:latest
-      ignore_errors: yes    # 아직 이미지 없을 수 있으니 에러 무시
