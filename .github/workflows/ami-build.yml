@@ -39,7 +39,7 @@ jobs:
 
       - name: Packer Validate
         working-directory: packer
-        run: packer validate -var "tailscale_authkey=validate-only" .
+        run: packer validate .
 
       - name: Packer Build
         working-directory: packer

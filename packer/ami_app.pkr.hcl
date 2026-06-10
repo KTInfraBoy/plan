@@ -38,6 +38,7 @@ variable "instance_type" {
 # 빌드 시: export PKR_VAR_tailscale_authkey="tskey-auth-xxx"
 variable "tailscale_authkey" {
   sensitive = true
+  default   = ""
 }
 
 # ── 소스 AMI 설정 ────────────────────────────────────────────
