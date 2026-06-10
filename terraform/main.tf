@@ -324,12 +324,12 @@ resource "aws_instance" "db" {
 
   user_data = <<-EOF
     #!/bin/bash
-    # v3 - add SSM profile
     dnf install -y docker
     systemctl enable docker
     systemctl start docker
     usermod -aG docker ec2-user
 
+    # 스키마가 bake된 커스텀 이미지 사용 (init_db.sql 자동 실행)
     docker run -d \
       --name postgres \
       --restart always \
@@ -337,7 +337,7 @@ resource "aws_instance" "db" {
       -e POSTGRES_PASSWORD=tiger \
       -e POSTGRES_DB=scott_db \
       -p 5432:5432 \
-      postgres:16
+      jj3061/infraboy-db:latest
   EOF
 
   tags = { Name = "${var.project}-db" }
@@ -431,9 +431,17 @@ resource "aws_launch_template" "app" {
     COMPOSE
     fi
 
-    # DB URL 설정 및 앱 실행
+    # DB URL 설정
     echo "DB_URL=postgresql://scott:tiger@${aws_instance.db.private_ip}:5432/scott_db" \
       > /home/ec2-user/.env
+
+    # DB 포트 열릴 때까지 대기 (최대 10분)
+    echo "DB 준비 대기 중..."
+    for i in $(seq 1 120); do
+      bash -c "echo > /dev/tcp/${aws_instance.db.private_ip}/5432" 2>/dev/null && break
+      sleep 5
+    done
+    echo "DB 준비 완료"
 
     cd /home/ec2-user
     docker-compose --env-file .env -f docker-compose.prod.yml up -d
